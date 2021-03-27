@@ -46,4 +46,16 @@ ntb_log_start(void);
 void
 ntb_log_close(void);
 
+
+#if defined(DEBUG) || defined(_DEBUG) || defined(__DEBUG) || defined(__DEBUG__)
+NTB_PRINTF_FORMAT(4, 5) void
+ntb_log_debug_handle(const char *debug_file, const int debug_line, const char *debug_function, const char *format, ...);
+#define ntb_log_debug_info __FILE__, __LINE__, __FUNCTION__
+#define ntb_log_debug_message(a) ntb_log_debug_handle(ntb_log_debug_info, a)
+#else
+#define ntb_log_debug_handle ntb_log
+#define ntb_log_debug_info  
+#define ntb_log_debug_message(a) ntb_log_debug_handle("%s", a)
+#endif
+
 #endif /* __NTB_LOG_H__ */

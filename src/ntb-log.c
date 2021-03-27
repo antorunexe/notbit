@@ -88,6 +88,54 @@ ntb_log(const char *format, ...)
         pthread_mutex_unlock(&ntb_log_mutex);
 }
 
+#if defined(DEBUG) || defined(_DEBUG) || defined(__DEBUG) || defined(__DEBUG__)
+void
+ntb_log_debug_handle(const char *debug_file, const int debug_line, const char *debug_function, const char *format, ...)
+{
+        va_list ap;
+        time_t now;
+        struct tm tm;
+
+        if (!ntb_log_available())
+                return;
+
+        pthread_mutex_lock(&ntb_log_mutex);
+
+        time(&now);
+        gmtime_r(&now, &tm);
+
+        ntb_buffer_append_printf(&ntb_log_buffer,
+                                 "[%4d-%02d-%02dT%02d:%02d:%02dZ] ",
+                                 tm.tm_year + 1900,
+                                 tm.tm_mon + 1,
+                                 tm.tm_mday,
+                                 tm.tm_hour,
+                                 tm.tm_min,
+                                 tm.tm_sec);
+		if(debug_file) {
+			ntb_buffer_append_printf(&ntb_log_buffer,
+									 "[IN %s:%d] ",
+									 debug_file,
+									 debug_line);
+		}
+		if(debug_function) {
+			ntb_buffer_append_printf(&ntb_log_buffer,
+									 "[FUNCTION %s] ",
+									 debug_function);
+		}
+
+        va_start(ap, format);
+        ntb_buffer_append_vprintf(&ntb_log_buffer, format, ap);
+        va_end(ap);
+
+        ntb_buffer_append_c(&ntb_log_buffer, '\n');
+
+        pthread_cond_signal(&ntb_log_cond);
+
+        pthread_mutex_unlock(&ntb_log_mutex);
+}
+#endif
+
 static void
 block_sigint(void)
 {
