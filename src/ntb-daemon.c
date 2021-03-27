@@ -65,6 +65,7 @@ struct address {
 
 static struct address *option_listen_addresses = NULL;
 static struct address *option_peer_addresses = NULL;
+static char *option_config_file = NULL;
 static char *option_log_file = NULL;
 static bool option_daemonize = false;
 static char *option_user = NULL;
@@ -227,6 +228,9 @@ process_arguments(int argc, char **argv, struct ntb_error **error)
 
                 case 'l':
                         option_log_file = optarg;
+                        break;
+                case 'c':
+                        option_config_file = optarg;
                         break;
 
                 case 'd':
