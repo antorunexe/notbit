@@ -27,6 +27,7 @@
 #include <string.h>
 #include <openssl/ripemd.h>
 #include <openssl/sha.h>
+#include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/ecdsa.h>
 #include <openssl/obj_mac.h>
@@ -377,7 +378,8 @@ append_key_base(struct ntb_key *key,
 static void
 append_signature_from_digest(struct ntb_buffer *buffer,
                              struct ntb_key *key,
-                             const uint8_t *digest)
+                             const uint8_t *digest,
+                             size_t digest_length)
 {
         unsigned int sig_length = ECDSA_size(key->signing_key);
         uint8_t *sig = alloca(sig_length);
@@ -385,7 +387,7 @@ append_signature_from_digest(struct ntb_buffer *buffer,
 
         int_ret = ECDSA_sign(0, /* type (ignored) */
                              digest,
-                             SHA_DIGEST_LENGTH,
+                             digest_length,
                              sig,
                              &sig_length,
                              key->signing_key);
@@ -401,11 +403,20 @@ append_signature(struct ntb_buffer *buffer,
                  const uint8_t *data,
                  size_t length)
 {
+        /*
+         * TODO:
+         * WARNING:
+         * ATTENTION!
+         * SHA1 is deprecated!
+         * This is not supported and should be fixed.
+         * If you know how the protocol has changed, please report it
+         */
         uint8_t digest[SHA_DIGEST_LENGTH];
 
+        ntb_log_debug_message("Call SHA1 - DEPRECATED");
         SHA1(data, length, digest);
 
-        append_signature_from_digest(buffer, key, digest);
+        append_signature_from_digest(buffer, key, digest, SHA_DIGEST_LENGTH);
 }
 
 static void
@@ -423,6 +434,14 @@ static struct ntb_blob *
 create_v4_key(struct ntb_crypto *crypto,
               struct ntb_key *key)
 {
+        /*
+         * TODO:
+         * WARNING:
+         * ATTENTION!
+         * SHA1 is deprecated!
+         * This is not supported and should be fixed.
+         * If you know how the protocol has changed, please report it
+         */
         struct ntb_blob *blob;
         struct ntb_buffer buffer;
         size_t behaviors_offset;
@@ -430,6 +449,7 @@ create_v4_key(struct ntb_crypto *crypto,
         struct ntb_buffer encrypted_buffer;
         SHA_CTX sha_ctx;
         uint8_t digest[SHA_DIGEST_LENGTH];
+        ntb_log_debug_message("Call SHA1 - DEPRECATED");
 
         ntb_buffer_init(&buffer);
         ntb_blob_dynamic_init(&encrypted_buffer);
@@ -448,7 +468,7 @@ create_v4_key(struct ntb_crypto *crypto,
                     buffer.length - behaviors_offset);
         SHA1_Final(digest, &sha_ctx);
 
-        append_signature_from_digest(&buffer, key, digest);
+        append_signature_from_digest(&buffer, key, digest, SHA_DIGEST_LENGTH);
 
         tag_public_key_point =
                 ntb_ecc_make_pub_key_point(crypto->ecc,
@@ -528,6 +548,7 @@ static bool
 check_signature_for_digest(struct ntb_crypto *crypto,
                            const uint8_t *network_public_key,
                            const uint8_t *digest,
+                           size_t digest_length_length,
                            const uint8_t *signature,
                            size_t signature_length)
 {
@@ -546,7 +567,7 @@ check_signature_for_digest(struct ntb_crypto *crypto,
 
         verify_result = ECDSA_verify(0, /* type, ignored */
                                      digest,
-                                     SHA_DIGEST_LENGTH,
+                                     digest_length_length,
                                      signature,
                                      signature_length,
                                      key);
@@ -564,15 +585,71 @@ check_signature_for_data(struct ntb_crypto *crypto,
                          const uint8_t *signature,
                          size_t signature_length)
 {
-        uint8_t digest[SHA_DIGEST_LENGTH];
-
-        SHA1(data, data_length, digest);
-
-        return check_signature_for_digest(crypto,
-                                          network_public_key,
-                                          digest,
-                                          signature,
-                                          signature_length);
+        bool signature_status = 0;
+        uint8_t sha1_digest[SHA_DIGEST_LENGTH];
+        EVP_MD_CTX* sha256_evp = NULL;
+        unsigned int sha256_length = 0;
+        unsigned char sha256_digest[EVP_MAX_MD_SIZE];
+        sha256_evp = EVP_MD_CTX_new();
+        if(sha256_evp == NULL) {
+            ntb_log_debug_message("Unable init EVP_MD_CTX_new()");
+            goto sha256_error;
+        }
+        if(!EVP_DigestInit_ex(sha256_evp, EVP_sha256(), NULL)) {
+            ntb_log_debug_message("Unable call EVP_DigestInit_ex() with EVP_sha256");
+            goto sha256_error;
+        }
+        if(!EVP_DigestUpdate(sha256_evp,
+            data,
+            data_length)
+        ) {
+            ntb_log_debug_message("Unable update sha256_evp");
+            goto sha256_error;
+        }
+        if(
+            !EVP_DigestFinal_ex(sha256_evp, sha256_digest, &sha256_length)
+            || !sha256_length
+            || (sha256_length >= EVP_MAX_MD_SIZE)
+        ) {
+            ntb_log_debug_message("Unable generate hash sha256_evp");
+            goto sha256_error;
+        }
+        if(check_signature_for_digest(
+            crypto,
+            network_public_key,
+            sha256_digest,
+            sha256_length,
+            signature,
+            signature_length
+        )) {
+            signature_status = 1;
+        } else {
+            ntb_log("The signature in the decrypted blob is invalid by SHA2");
+        }
+sha256_error:
+        if(sha256_evp != NULL) {
+            EVP_MD_CTX_free(sha256_evp);
+        }
+        if( signature_status && /* allow_deprecated_hash_sha1_for_signature */ 1 /* WARNING - FOR DEVELOPMENT ONLY */ ) {
+            /*
+             * TODO: Support SHA1. This must be declared in the configuration parameters.
+             * allow_deprecated_hash_sha1_for_signature = 0
+             */
+            SHA1(data, data_length, sha1_digest);
+            if(check_signature_for_digest(
+                crypto,
+                network_public_key,
+                sha1_digest,
+                SHA_DIGEST_LENGTH,
+                signature,
+                signature_length
+            )) {
+                signature_status = 1;
+            } else {
+                ntb_log("The signature in the decrypted blob is invalid by SHA1");
+            }
+        }
+        return signature_status;
 }
 
 static void
@@ -711,6 +788,14 @@ handle_create_msg_blob(struct ntb_crypto_cookie *cookie)
         size_t signature_data_start;
         SHA_CTX sha_ctx;
         uint8_t digest[SHA_DIGEST_LENGTH];
+        /*
+         * TODO:
+         * WARNING:
+         * ATTENTION!
+         * SHA1 is deprecated!
+         * This is not supported and should be fixed.
+         * If you know how the protocol has changed, please report it
+         */
 
         ntb_blob_dynamic_init(&buf);
 
@@ -748,7 +833,7 @@ handle_create_msg_blob(struct ntb_crypto_cookie *cookie)
 
         ntb_buffer_init(&signature);
 
-        append_signature_from_digest(&signature, from_key, digest);
+        append_signature_from_digest(&signature, from_key, digest, SHA_DIGEST_LENGTH);
 
         ntb_ecc_encrypt_update(crypto->ecc,
                                signature.data,
@@ -780,8 +865,11 @@ check_signature_in_decrypted_msg(const uint8_t *header,
                                  struct ntb_crypto_cookie *cookie)
 {
         struct ntb_proto_decrypted_msg msg;
-        uint8_t digest[SHA_DIGEST_LENGTH];
-        SHA_CTX sha_ctx;
+        uint8_t sha1_digest[SHA_DIGEST_LENGTH];
+        SHA_CTX sha1_ctx;
+        EVP_MD_CTX* sha256_evp = NULL;
+        unsigned int sha256_length = 0;
+        unsigned char sha256_digest[EVP_MAX_MD_SIZE];
 
         ntb_log("Successfully decrypted a message using the key “%s”",
                 cookie->decrypt_msg.chosen_key->label);
@@ -790,30 +878,83 @@ check_signature_in_decrypted_msg(const uint8_t *header,
                                          cookie->decrypt_msg.result->size,
                                          &msg)) {
                 ntb_log("The decrypted message is invalid");
-                goto invalid;
+                goto signature_invalid;
         }
-
-        SHA1_Init(&sha_ctx);
-        SHA1_Update(&sha_ctx,
-                    header + sizeof (uint64_t),
-                    header_size - sizeof (uint64_t));
-        SHA1_Update(&sha_ctx,
-                    cookie->decrypt_msg.result->data,
-                    msg.signed_data_length);
-        SHA1_Final(digest, &sha_ctx);
-
-        if (!check_signature_for_digest(cookie->crypto,
-                                        msg.sender_signing_key,
-                                        digest,
-                                        msg.sig,
-                                        msg.sig_length)) {
-                ntb_log("The signature in the decrypted message is invalid");
-                goto invalid;
+        sha256_evp = EVP_MD_CTX_new();
+        if(sha256_evp == NULL) {
+            ntb_log_debug_message("Unable init EVP_MD_CTX_new()");
+            goto sha256_error;
         }
+        if(!EVP_DigestInit_ex(sha256_evp, EVP_sha256(), NULL)) {
+            ntb_log_debug_message("Unable call EVP_DigestInit_ex() with EVP_sha256");
+            goto sha256_error;
+        }
+        if(!EVP_DigestUpdate(sha256_evp,
+            header + sizeof (uint64_t),
+            header_size - sizeof (uint64_t))
+        ) {
+            ntb_log_debug_message("Unable update sha256_evp step 1");
+            goto sha256_error;
+        }
+        if(!EVP_DigestUpdate(sha256_evp,
+            cookie->decrypt_msg.result->data,
+            msg.signed_data_length)
+        ) {
+            ntb_log_debug_message("Unable update sha256_evp step 1");
+            goto sha256_error;
+        }
+        if(
+            !EVP_DigestFinal_ex(sha256_evp, sha256_digest, &sha256_length)
+            || !sha256_length
+            || (sha256_length >= EVP_MAX_MD_SIZE)
+        ) {
+            ntb_log_debug_message("Unable generate hash sha256_evp");
+            goto sha256_error;
+        }
+        if (check_signature_for_digest(
+            cookie->crypto,
+            msg.sender_signing_key,
+            sha1_digest,
+            SHA_DIGEST_LENGTH,
+            msg.sig,
+            msg.sig_length
+        )) {
+            EVP_MD_CTX_free(sha256_evp);
+            return;
+        }
+        ntb_log("The signature in the decrypted blob is invalid by SHA2");
+sha256_error:
+        if(sha256_evp != NULL) {
+            EVP_MD_CTX_free(sha256_evp);
+        }
+        if( /* allow_deprecated_hash_sha1_for_signature */ 1 /* WARNING - FOR DEVELOPMENT ONLY */ ) {
+            /*
+             * TODO: Support SHA1. This must be declared in the configuration parameters.
+             * allow_deprecated_hash_sha1_for_signature = 0
+             */
+            SHA1_Init(&sha1_ctx);
+            SHA1_Update(&sha1_ctx,
+                        header + sizeof (uint64_t),
+                        header_size - sizeof (uint64_t));
+            SHA1_Update(&sha1_ctx,
+                        cookie->decrypt_msg.result->data,
+                        msg.signed_data_length);
+            SHA1_Final(sha1_digest, &sha1_ctx);
 
-        return;
+            if (check_signature_for_digest(
+                cookie->crypto,
+                msg.sender_signing_key,
+                sha1_digest,
+                SHA_DIGEST_LENGTH,
+                msg.sig,
+                msg.sig_length
+            )) {
+                return;
+            }
 
-invalid:
+            ntb_log("The signature in the decrypted message is invalid by SHA1");
+        }
+signature_invalid:
         ntb_key_unref(cookie->decrypt_msg.chosen_key);
         cookie->decrypt_msg.chosen_key = NULL;
         ntb_blob_unref(cookie->decrypt_msg.result);
