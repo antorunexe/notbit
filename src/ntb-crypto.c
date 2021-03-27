@@ -900,7 +900,7 @@ check_signature_in_decrypted_msg(const uint8_t *header,
             cookie->decrypt_msg.result->data,
             msg.signed_data_length)
         ) {
-            ntb_log_debug_message("Unable update sha256_evp step 1");
+            ntb_log_debug_message("Unable update sha256_evp step 2");
             goto sha256_error;
         }
         if(
@@ -914,15 +914,15 @@ check_signature_in_decrypted_msg(const uint8_t *header,
         if (check_signature_for_digest(
             cookie->crypto,
             msg.sender_signing_key,
-            sha1_digest,
-            SHA_DIGEST_LENGTH,
+            sha256_digest,
+            sha256_length,
             msg.sig,
             msg.sig_length
         )) {
             EVP_MD_CTX_free(sha256_evp);
             return;
         }
-        ntb_log("The signature in the decrypted blob is invalid by SHA2");
+        ntb_log("The signature in the decrypted message is invalid by SHA2");
 sha256_error:
         if(sha256_evp != NULL) {
             EVP_MD_CTX_free(sha256_evp);
